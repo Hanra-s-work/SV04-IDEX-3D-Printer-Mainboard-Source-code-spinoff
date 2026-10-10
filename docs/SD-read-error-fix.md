@@ -1,4 +1,4 @@
-# SD read-error fix (Firmware 1.1.0 / Marlin 2.0.9.2)
+# SD reliability fixes (Sovol SV04 / Marlin 2.0.9.2)
 
 Target: Sovol SV04 (IDEX) mainboard, `STM32F103RET6_creality` build.
 Tracked against upstream Sovol3d/SV04-IDEX-3D-Printer-Mainboard-Source-code.
@@ -45,7 +45,9 @@ is wedged: no new moves are fetched, status stops reaching the display, and
 The `USE_WATCHDOG` feed lives in `manage_heater()`, so the hardware watchdog is
 never refreshed either — hence no auto-reset.
 
-## Fix
+## Fixes
+
+### Fix 1 — abort on SD read error (was: infinite loop)
 
 Treat a mid-file read error as a fatal print error and abort gracefully instead
 of retrying:
@@ -64,6 +66,40 @@ close the file, clear the queue, `quickstop_stepper()`, abort the job timer,
 `thermalManager.disable_all_heaters()` (heaters off), and `recovery.purge()`.
 This converts "freeze with heaters stuck on" into a clean stop.
 
+### Fix 2 — feed the watchdog during SD I/O
+
+`Marlin/src/HAL/STM32F1/onboard_sd.cpp` polls the card with blocking loops
+(`wait_ready()` and `rcvr_datablock()`) that previously never fed the watchdog.
+Added `watchdog_refresh()` inside both loops. This prevents false watchdog resets
+during legitimate (bounded) card waits while still allowing a genuine hardware
+hang (inside `dmaTransfer`) to trip the IWDG and reset safely.
+
+### Fix 3 — slower SD SPI clock
+
+`onboard_sd.cpp`: `SPI_CLOCK_MAX` changed from `SPI_BAUD_PCLK_DIV_4` to
+`SPI_BAUD_PCLK_DIV_8`. Halves the SPI clock, trading a little read throughput
+for much better tolerance of a marginal SD slot / electrical noise.
+
+### Fix 4 — Power-Loss Recovery off by default
+
+`Configuration_adv.h`: `PLR_ENABLED_DEFAULT` changed from `true` to `false`.
+The `/PLR` file is no longer rewritten every layer by default, avoiding the
+constant small writes that wear/corrupt SD cards over time. Can be re-enabled
+per-print with `M413 S1` + `M500`.
+
+> Note: `M413` state is stored in EEPROM, so an existing board that already has
+> PLR saved as enabled will keep it enabled until reset (`M502` + `M500`) or
+> explicitly set `M413 S0` + `M500`.
+
+## Version scheme
+
+| Firmware | Contents |
+|----------|----------|
+| `V1.1.1` | Fix 1 |
+| `V1.1.2` | Fixes 2, 3, 4 |
+
+`SHORT_BUILD_VERSION` lives in `Marlin/src/inc/Version.h`.
+
 ## Build
 
 ```
@@ -71,18 +107,15 @@ pio run -e STM32F103RET6_creality
 ```
 
 Produces `.pio/build/STM32F103RET6_creality/firmware.bin`
-(verified: Flash ~29%, RAM ~14%).
+(verified: Flash ~29%, RAM ~14%). Flash by placing `firmware.bin` at the root of a
+FAT32 SD card with 4 KiB clusters (`mkfs.vfat -F 32 -s 8`) and powering on; the
+bootloader renames it to `firmware.CUR` on success.
 
-## Related observations (not yet changed)
+## Remaining notes (not firmware changes)
 
 - **SD card size:** a 64 GB SanDisk (FAT32, 32 KiB clusters) reproduced the
-  failure; an 8-16 GB card with 4 KiB clusters (`mkfs.vfat -F 32 -s 8`) printed
-  past the previous failure point with zero read errors. Recommend <= 32 GB.
-- **Power-Loss Recovery wear:** `PLR_ENABLED_DEFAULT true` rewrites `/PLR` every
-  layer (`powerloss.cpp`), wearing/corrupting cards over time.
-- **Watchdog gap:** there is no `watchdog_refresh()` in the SD read path
-  (`HAL/STM32F1/onboard_sd.cpp`), so a *hard* SD hang would still not reset the
-  board. A follow-up fix should feed the watchdog during SD I/O.
-- **SPI clock:** `onboard_sd.cpp` uses `SPI_BAUD_PCLK_DIV_4`; lowering to
-  `DIV_8`/`DIV_16` improves tolerance of a marginal SD slot at the cost of read
-  speed.
+  failure; an 8-16 GB card with 4 KiB clusters printed past the previous failure
+  point with zero read errors. Use <= 32 GB, ideally 8-16 GB.
+- **Long filenames:** the touchscreen UI (RTS protocol) only lists `.gcode`
+  files and truncates display names at ~20 chars; Sovol documents a 16-char /
+  no-special-character limit. Keep filenames short and plain.

@@ -33,7 +33,7 @@
 #endif
 
 #if ONBOARD_SPI_DEVICE == 1
-  #define SPI_CLOCK_MAX SPI_BAUD_PCLK_DIV_4
+  #define SPI_CLOCK_MAX SPI_BAUD_PCLK_DIV_8
 #else
   #define SPI_CLOCK_MAX SPI_BAUD_PCLK_DIV_2
 #endif
@@ -119,6 +119,7 @@ static int wait_ready ( // 1:Ready, 0:Timeout
   timeout = millis() + wt;
   do {
     d = xchg_spi(0xFF);
+    watchdog_refresh();
     // This loop takes a while. Insert rot_rdq() here for multitask environment.
   } while (d != 0xFF && (timeout > millis()));  // Wait for card goes ready or timeout
 
@@ -180,6 +181,7 @@ static int rcvr_datablock (   // 1:OK, 0:Error
   timeout = millis() + 200;
   do {                            // Wait for DataStart token in timeout of 200ms
     token = xchg_spi(0xFF);
+    watchdog_refresh();
                                   // This loop will take a while. Insert rot_rdq() here for multitask environment.
   } while ((token == 0xFF) && (timeout > millis()));
   if (token != 0xFE) return 0;    // Function fails if invalid DataStart token or timeout
