@@ -168,6 +168,9 @@ __pycache__
 # IOLogger logs
 *_log.csv
 
+# Diagnostic / build logs (serial_monitor.py, PlatformIO)
+logs/
+
 # Simulation / Native
 eeprom.dat
 imgui.ini
